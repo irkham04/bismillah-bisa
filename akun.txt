@@ -1,0 +1,1 @@
+https://young-dew.hunzua.workers.dev/vpn/v2ray?type=vless&bug=quiz.vidio.com&tls=true&wildcard=true&limit=5&country=ID
