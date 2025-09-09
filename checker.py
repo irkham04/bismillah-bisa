@@ -5,10 +5,37 @@ import tempfile
 import time
 import os
 import re
+import requests
 
 AKUN_FILE = "akun.txt"
 OUTPUT_FILE = "active_all.txt"
 
+# ================== LOAD AKUN ==================
+def load_accounts(filename):
+    accounts = []
+    with open(filename, "r") as f:
+        lines = [x.strip() for x in f if x.strip()]
+
+    for line in lines:
+        if line.startswith("http://") or line.startswith("https://"):
+            try:
+                print(f"📥 Ambil sub-link: {line}")
+                r = requests.get(line, timeout=15)
+                if r.status_code == 200:
+                    subs = r.text.strip().splitlines()
+                    for s in subs:
+                        if s.startswith(("vmess://", "vless://", "trojan://", "ss://")):
+                            accounts.append(s.strip())
+            except Exception as e:
+                print(f"⚠️ Gagal ambil {line}: {e}")
+        else:
+            parts = re.split(r"\s+", line)
+            for p in parts:
+                if p.startswith(("vmess://", "vless://", "trojan://", "ss://")):
+                    accounts.append(p.strip())
+    return accounts
+
+# ================== VMESS DECODE ==================
 def decode_vmess(link):
     try:
         raw = link.replace("vmess://", "")
@@ -18,6 +45,7 @@ def decode_vmess(link):
         print(f"[VMESS] Gagal decode: {e}")
         return None
 
+# ================== OUTBOUND BUILDER ==================
 def make_outbound(link):
     if link.startswith("vmess://"):
         vmess = decode_vmess(link)
@@ -44,7 +72,6 @@ def make_outbound(link):
         }
 
     elif link.startswith("vless://"):
-        # format: vless://uuid@server:port?encryption=none&security=tls#name
         m = re.match(r"vless://(.+)@([\w\.\-]+):(\d+)\??(.*)", link)
         if not m:
             return None
@@ -69,7 +96,6 @@ def make_outbound(link):
         }
 
     elif link.startswith("trojan://"):
-        # format: trojan://password@server:port?peer=xxx#name
         m = re.match(r"trojan://(.+)@([\w\.\-]+):(\d+)", link)
         if not m:
             return None
@@ -90,12 +116,12 @@ def make_outbound(link):
         }
 
     elif link.startswith("ss://"):
-        # untuk simplicity, skip detail parsing, asumsi ss:// sudah benar
+        # SS parsing basic, bisa ditambah kalau perlu
         return {
             "protocol": "shadowsocks",
             "settings": {
                 "servers": [{
-                    "address": "127.0.0.1",  # harus parsing detail base64, bisa ditambah nanti
+                    "address": "127.0.0.1",
                     "port": 8388,
                     "method": "aes-256-gcm",
                     "password": "test"
@@ -104,6 +130,7 @@ def make_outbound(link):
         }
     return None
 
+# ================== REAL DELAY TEST ==================
 def check_delay(outbound):
     cfg = {
         "log": {"loglevel": "warning"},
@@ -129,12 +156,12 @@ def check_delay(outbound):
         time.sleep(1.5)  # kasih waktu xray boot
 
         test = subprocess.run(
-            ["curl", "-x", "socks5h://127.0.0.1:10808", "-m", "8", "-o", "/dev/null", "-s", "-w", "%{http_code}", "https://www.google.com"],
+            ["curl", "-x", "socks5h://127.0.0.1:10808", "-m", "10", "-o", "/dev/null", "-s", "-w", "%{http_code}", "https://www.gstatic.com/generate_204"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
         code = test.stdout.decode().strip()
-        if code == "200":
+        if code == "204":
             delay = int((time.time() - start) * 1000)
             return delay
         else:
@@ -145,9 +172,9 @@ def check_delay(outbound):
         proc.kill()
         os.unlink(tmp.name)
 
+# ================== MAIN ==================
 def main():
-    with open(AKUN_FILE, "r") as f:
-        accounts = [x.strip() for x in f if x.strip()]
+    accounts = load_accounts(AKUN_FILE)
 
     results = []
     for acc in accounts:
