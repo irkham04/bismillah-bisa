@@ -1,72 +1,91 @@
 import socket
+import ssl
 import base64
 import json
 import re
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Ambil isi subscription (URL) dan decode base64
 def fetch_subscription(url):
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, timeout=15)
         r.raise_for_status()
         data = r.text.strip()
         try:
-            # coba decode base64
             decoded = base64.b64decode(data).decode()
             return [line.strip() for line in decoded.splitlines() if line.strip()]
         except:
-            # kalau bukan base64, berarti langsung daftar akun
             return [line.strip() for line in data.splitlines() if line.strip()]
     except Exception as e:
         print(f"[!] Gagal fetch {url}: {e}")
         return []
 
+# Parse vmess link
 def parse_vmess(link):
     try:
-        data = base64.b64decode(link.replace("vmess://", "")).decode()
+        raw = link[8:]  # hapus "vmess://"
+        data = base64.b64decode(raw + "=" * (-len(raw) % 4)).decode()
         return json.loads(data)
-    except:
+    except Exception as e:
+        print(f"[!] Gagal parse vmess: {e}")
         return {}
 
-def check_tcp(host, port, timeout=8):
+# Cek koneksi (TCP + TLS opsional)
+def check_connection(host, port, use_tls=False, timeout=8):
     try:
-        s = socket.create_connection((host, port), timeout=timeout)
-        s.close()
+        sock = socket.create_connection((host, port), timeout=timeout)
+        if use_tls:
+            context = ssl.create_default_context()
+            sock = context.wrap_socket(sock, server_hostname=host)
+        sock.close()
         return True
     except:
         return False
 
+# Cek akun
 def check_account(link):
-    host, port = None, None
+    host, port, use_tls = None, None, False
+
     if link.startswith("vmess://"):
         cfg = parse_vmess(link)
-        host, port = cfg.get("add"), int(cfg.get("port", 0) or 0)
+        host = cfg.get("add")
+        port = int(cfg.get("port", 0) or 0)
+        if cfg.get("tls", "").lower() == "tls":
+            use_tls = True
+
     elif link.startswith("vless://") or link.startswith("trojan://"):
         m = re.match(r".*?@([^:]+):(\d+)", link)
-        if m: host, port = m.group(1), int(m.group(2))
+        if m:
+            host, port = m.group(1), int(m.group(2))
+            use_tls = True  # mayoritas vless/trojan pakai TLS
+
     elif link.startswith("ss://"):
         m = re.match(r"ss://.*?@([^:]+):(\d+)", link)
-        if m: host, port = m.group(1), int(m.group(2))
+        if m:
+            host, port = m.group(1), int(m.group(2))
 
     if not host or not port:
         return (link, False)
-    return (link, check_tcp(host, port))
+
+    status = check_connection(host, port, use_tls)
+    return (link, status)
 
 if __name__ == "__main__":
     accounts = []
 
-    # baca isi akun.txt
+    # baca file akun.txt
     with open("akun.txt") as f:
         raw = [line.strip() for line in f if line.strip()]
 
-    # kalau isinya URL, fetch sub-akun
+    # expand subscription
     for item in raw:
         if item.startswith("http://") or item.startswith("https://"):
             accounts.extend(fetch_subscription(item))
         else:
             accounts.append(item)
 
-    print(f"🔍 Total akun/sub-akun yang dicek: {len(accounts)}")
+    print(f"🔍 Total akun/sub-akun dicek: {len(accounts)}")
 
     active = []
     with ThreadPoolExecutor(max_workers=50) as executor:
