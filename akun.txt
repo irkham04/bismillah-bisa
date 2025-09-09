@@ -1,1 +1,2 @@
 https://young-dew.hunzua.workers.dev/vpn/v2ray?type=vless&bug=quiz.vidio.com&tls=true&wildcard=true&limit=5&country=ID
+https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Sub1.txt
