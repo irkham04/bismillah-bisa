@@ -1,9 +1,9 @@
 name: Cek Akun Aktif
 
 on:
-  workflow_dispatch: # bisa dijalankan manual
+  workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *" # jalan tiap 6 jam
+    - cron: "0 */6 * * *"
 
 jobs:
   check:
@@ -39,14 +39,13 @@ jobs:
 
       - name: Commit & Push result
         env:
-          TOKEN: ${{ secrets.GH_TOKEN }}
+          TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions"
           git add active_all.txt
           git commit -m "Update hasil active_all.txt" || echo "No changes"
 
-          # ambil branch default repo
           BRANCH=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
           echo "Push ke branch $BRANCH"
           git push https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git HEAD:$BRANCH
