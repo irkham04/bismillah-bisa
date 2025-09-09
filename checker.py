@@ -4,15 +4,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 AKUN_FILE = "akun.txt"
 OUTPUT_FILE = "active_all.txt"
 OUTPUT_QUIZ_FILE = "active_quiz.txt"
-MAX_WORKERS = 20  # Naikkan
+MAX_WORKERS = 20
 TIMEOUT = 10
-SLEEP_TIME = 1  # Dipercepat
-RETRY = 1       # Cukup 1 retry
+SLEEP_TIME = 1
+RETRY = 1
 BASE_PORT = 10808
 ENDPOINTS = ["http://cp.cloudflare.com/generate_204", "http://www.google.com/generate_204"]
 NEW_ADDR = "quiz.vidio.com"
 
-# Load akun
+# Load akun / sub-link
 def load_accounts(filename):
     accounts = []
     with open(filename) as f:
@@ -37,7 +37,7 @@ def decode_vmess(link):
     try:
         b64 = link.replace("vmess://","")
         b64 += '=' * (-len(b64) % 4)
-        data = base64.urlsafe_b64decode(b64).decode()
+        data = base64.urlsafe_b64decode(b64).decode('utf-8')
         vmess = json.loads(data)
         vmess["flow"] = vmess.get("flow", "")
         return vmess
@@ -97,7 +97,7 @@ def make_outbound(link):
 
     elif link.startswith("ss://"):
         try:
-            part = link[5:].split('#')[0]
+            part = line[5:].split('#')[0]
             if '@' in part:
                 b64, server_port = part.split('@')
                 method_pass = base64.urlsafe_b64decode(b64 + "==").decode()
@@ -171,21 +171,26 @@ def is_port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
+# replace address dengan safe handling
 def replace_address(line):
     line = line.strip()
     if line.startswith("vmess://"):
         b64 = line[7:]
         b64 += '=' * (-len(b64) % 4)
-        data = base64.urlsafe_b64decode(b64).decode()
-        vmess = json.loads(data)
-        vmess["add"] = NEW_ADDR
-        return "vmess://" + base64.urlsafe_b64encode(json.dumps(vmess).encode()).decode()
+        try:
+            data = base64.urlsafe_b64decode(b64).decode('utf-8')
+            vmess = json.loads(data)
+            vmess["add"] = NEW_ADDR
+            new_b64 = base64.urlsafe_b64encode(json.dumps(vmess).encode()).decode()
+            return "vmess://" + new_b64
+        except:
+            return line
 
     elif line.startswith("vless://"):
         m = re.match(r"(vless://.+@)([^:/]+)(:\d+.*)", line)
         if m:
             return m.group(1) + NEW_ADDR + m.group(3)
-    
+
     elif line.startswith("trojan://"):
         m = re.match(r"(trojan://.+@)([^:/]+)(:\d+.*)", line)
         if m:
