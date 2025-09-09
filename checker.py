@@ -7,6 +7,7 @@ MAX_WORKERS = 10
 TIMEOUT = 5
 RETRY = 1
 
+# Load akun / sub-link
 def load_accounts(filename):
     accounts = []
     with open(filename) as f:
@@ -39,9 +40,17 @@ def make_outbound(link):
         vmess = decode_vmess(link)
         if not vmess: return None
         net = vmess.get("net","tcp")
-        tls = "tls" if vmess.get("tls","").lower()=="tls" else ""
+        tls_field = vmess.get("tls","")
+        if isinstance(tls_field,bool):
+            tls = "tls" if tls_field else ""
+        else:
+            tls = "tls" if str(tls_field).lower() == "tls" else ""
         path = vmess.get("path","")
-        return {"protocol":"vmess","settings":{"vnext":[{"address":vmess["add"],"port":int(vmess["port"]),"users":[{"id":vmess["id"],"alterId":int(vmess.get("aid",0))}]}]},"streamSettings":{"network":net,"security":tls,"wsSettings":{"path":path}}}
+        return {"protocol":"vmess",
+                "settings":{"vnext":[{"address":vmess["add"],"port":int(vmess["port"]),
+                                       "users":[{"id":vmess["id"],"alterId":int(vmess.get("aid",0))}]}]},
+                "streamSettings":{"network":net,"security":tls,"wsSettings":{"path":path}}}
+
     elif link.startswith("vless://"):
         m = re.match(r"vless://(.+)@([\w\.\-]+):(\d+)\??(.*)", link)
         if not m: return None
@@ -51,7 +60,11 @@ def make_outbound(link):
         path = query.get("path","")
         tls = "tls" if query.get("security","")=="tls" else ""
         host = query.get("host","")
-        return {"protocol":"vless","settings":{"vnext":[{"address":addr,"port":int(port),"users":[{"id":uid,"encryption":"none"}]}]},"streamSettings":{"network":net,"security":tls,"wsSettings":{"path":path,"headers":{"Host":host}}}}        
+        return {"protocol":"vless",
+                "settings":{"vnext":[{"address":addr,"port":int(port),
+                                       "users":[{"id":uid,"encryption":"none"}]}]},
+                "streamSettings":{"network":net,"security":tls,"wsSettings":{"path":path,"headers":{"Host":host}}}}
+
     elif link.startswith("trojan://"):
         m = re.match(r"trojan://(.+)@([\w\.\-]+):(\d+)\??(.*)", link)
         if not m: return None
@@ -59,9 +72,13 @@ def make_outbound(link):
         query = dict(x.split("=") for x in params.split("&") if "=" in x)
         path = query.get("path","")
         sni = query.get("sni","")
-        return {"protocol":"trojan","settings":{"servers":[{"address":addr,"port":int(port),"password":passwd}]},"streamSettings":{"network":"ws","security":"tls","wsSettings":{"path":path,"headers":{"Host":sni}}}}
+        return {"protocol":"trojan",
+                "settings":{"servers":[{"address":addr,"port":int(port),"password":passwd}]},
+                "streamSettings":{"network":"ws","security":"tls","wsSettings":{"path":path,"headers":{"Host":sni}}}}
+
     elif link.startswith("ss://"):
-        return {"protocol":"shadowsocks","settings":{"servers":[{"address":"127.0.0.1","port":8388,"method":"aes-256-gcm","password":"test"}]}}
+        return {"protocol":"shadowsocks",
+                "settings":{"servers":[{"address":"127.0.0.1","port":8388,"method":"aes-256-gcm","password":"test"}]}}
     return None
 
 # check akun
@@ -70,13 +87,16 @@ def check_account(link):
     if not outbound: return None
     for _ in range(RETRY+1):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-        cfg = {"log":{"loglevel":"warning"},"inbounds":[{"port":10808,"listen":"127.0.0.1","protocol":"socks"}],"outbounds":[outbound]}
+        cfg = {"log":{"loglevel":"warning"},
+               "inbounds":[{"port":10808,"listen":"127.0.0.1","protocol":"socks"}],
+               "outbounds":[outbound]}
         json.dump(cfg, open(tmp.name,'w'))
         try:
             proc = subprocess.Popen(["xray","-c",tmp.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1.5)
             test = subprocess.run(
-                ["curl","-x","socks5h://127.0.0.1:10808","-m",str(TIMEOUT),"-s","-o","/dev/null","-w","%{http_code}","https://www.gstatic.com/generate_204"],
+                ["curl","-x","socks5h://127.0.0.1:10808","-m",str(TIMEOUT),"-s","-o","/dev/null",
+                 "-w","%{http_code}","https://www.gstatic.com/generate_204"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
             code = test.stdout.decode().strip()
