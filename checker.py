@@ -6,7 +6,6 @@ import re
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Ambil isi subscription (URL) dan decode base64
 def fetch_subscription(url):
     try:
         r = requests.get(url, timeout=15)
@@ -21,17 +20,15 @@ def fetch_subscription(url):
         print(f"[!] Gagal fetch {url}: {e}")
         return []
 
-# Parse vmess link
 def parse_vmess(link):
     try:
-        raw = link[8:]  # hapus "vmess://"
+        raw = link[8:]
         data = base64.b64decode(raw + "=" * (-len(raw) % 4)).decode()
         return json.loads(data)
     except Exception as e:
         print(f"[!] Gagal parse vmess: {e}")
         return {}
 
-# Cek koneksi (TCP + TLS opsional)
 def check_connection(host, port, use_tls=False, timeout=8):
     try:
         sock = socket.create_connection((host, port), timeout=timeout)
@@ -43,7 +40,6 @@ def check_connection(host, port, use_tls=False, timeout=8):
     except:
         return False
 
-# Cek akun
 def check_account(link):
     host, port, use_tls = None, None, False
 
@@ -51,14 +47,15 @@ def check_account(link):
         cfg = parse_vmess(link)
         host = cfg.get("add")
         port = int(cfg.get("port", 0) or 0)
-        if cfg.get("tls", "").lower() == "tls":
+        # Fix: TLS bisa string "tls" atau boolean true
+        if str(cfg.get("tls", "")).lower() in ["tls", "true"]:
             use_tls = True
 
     elif link.startswith("vless://") or link.startswith("trojan://"):
         m = re.match(r".*?@([^:]+):(\d+)", link)
         if m:
             host, port = m.group(1), int(m.group(2))
-            use_tls = True  # mayoritas vless/trojan pakai TLS
+            use_tls = True
 
     elif link.startswith("ss://"):
         m = re.match(r"ss://.*?@([^:]+):(\d+)", link)
@@ -74,11 +71,9 @@ def check_account(link):
 if __name__ == "__main__":
     accounts = []
 
-    # baca file akun.txt
     with open("akun.txt") as f:
         raw = [line.strip() for line in f if line.strip()]
 
-    # expand subscription
     for item in raw:
         if item.startswith("http://") or item.startswith("https://"):
             accounts.extend(fetch_subscription(item))
