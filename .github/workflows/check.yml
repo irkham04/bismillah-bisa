@@ -1,38 +1,10 @@
-name: Sortir Akun Aktif
-
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 */6 * * *"
-
-jobs:
-  check:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-        with:
-          persist-credentials: false
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Jalankan checker
-        run: python checker.py
-
-      - name: Commit hasil aktif
+- name: Commit hasil aktif
         env:
           TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${TOKEN}@github.com/${{ github.repository }}
+          git remote set-url origin https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git
           git add active_all.txt
           git commit -m "Update hasil active_all.txt" || echo "No changes"
-          git push
+          git push origin HEAD:${{ github.ref }}
