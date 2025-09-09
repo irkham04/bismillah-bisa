@@ -1,13 +1,14 @@
 name: Sortir Akun Aktif
 
 on:
-  workflow_dispatch: # manual
+  workflow_dispatch: # bisa dijalankan manual dari tab Actions
   schedule:
-    - cron: "0 */6 * * *" # otomatis tiap 6 jam
+    - cron: "0 */6 * * *" # otomatis setiap 6 jam
 
 jobs:
   check:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -15,9 +16,9 @@ jobs:
           persist-credentials: true
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.10
+          python-version: '3.10'
 
       - name: Jalankan checker
         run: python checker.py
