@@ -1,100 +1,171 @@
-import os
-import json
 import base64
-import re
-import requests
+import json
 import subprocess
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import os
+import re
 
-def fetch_subscription(url):
+AKUN_FILE = "akun.txt"
+OUTPUT_FILE = "active_all.txt"
+
+def decode_vmess(link):
     try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.text.strip()
-        try:
-            decoded = base64.b64decode(data).decode()
-            return [line.strip() for line in decoded.splitlines() if line.strip()]
-        except:
-            return [line.strip() for line in data.splitlines() if line.strip()]
+        raw = link.replace("vmess://", "")
+        data = base64.urlsafe_b64decode(raw + "==").decode("utf-8")
+        return json.loads(data)
     except Exception as e:
-        print(f"[!] Gagal fetch {url}: {e}")
-        return []
+        print(f"[VMESS] Gagal decode: {e}")
+        return None
 
-def make_config(link):
-    # Config Xray minimal untuk cek koneksi (dokumen resmi Xray-core)
+def make_outbound(link):
     if link.startswith("vmess://"):
-        cfg = base64.b64decode(link[8:] + "=" * (-len(link[8:]) % 4)).decode()
-        obj = json.loads(cfg)
+        vmess = decode_vmess(link)
+        if not vmess:
+            return None
         return {
-            "inbounds": [{"port": 10808, "protocol": "socks"}],
-            "outbounds": [{
-                "protocol": "vmess",
-                "settings": {"vnext": [{
-                    "address": obj["add"],
-                    "port": int(obj["port"]),
-                    "users": [{"id": obj["id"], "alterId": int(obj.get("aid", 0)), "security": obj.get("scy", "auto")}]
-                }]},
-                "streamSettings": {
-                    "network": obj.get("net", "tcp"),
-                    "security": "tls" if str(obj.get("tls", "")).lower() in ["tls", "true"] else "none",
-                    "tlsSettings": {"serverName": obj.get("sni") or obj.get("host")}
-                }
-            }]
+            "protocol": "vmess",
+            "settings": {
+                "vnext": [{
+                    "address": vmess["add"],
+                    "port": int(vmess["port"]),
+                    "users": [{
+                        "id": vmess["id"],
+                        "alterId": int(vmess.get("aid", 0)),
+                        "security": vmess.get("scy", "auto")
+                    }]
+                }]
+            },
+            "streamSettings": {
+                "network": vmess.get("net", "tcp"),
+                "security": "tls" if vmess.get("tls", "") == "tls" else "none",
+                "tlsSettings": {"allowInsecure": True}
+            }
         }
 
-    elif link.startswith("vless://") or link.startswith("trojan://") or link.startswith("ss://"):
-        # Xray bisa parse link langsung
+    elif link.startswith("vless://"):
+        # format: vless://uuid@server:port?encryption=none&security=tls#name
+        m = re.match(r"vless://(.+)@([\w\.\-]+):(\d+)\??(.*)", link)
+        if not m:
+            return None
+        uuid, addr, port, params = m.groups()
         return {
-            "inbounds": [{"port": 10808, "protocol": "socks"}],
-            "outbounds": [{"protocol": "freedom"}],  # dummy, akan diganti dengan link
-            "routing": {"rules": [{"type": "field", "outboundTag": "proxy"}]}
+            "protocol": "vless",
+            "settings": {
+                "vnext": [{
+                    "address": addr,
+                    "port": int(port),
+                    "users": [{
+                        "id": uuid,
+                        "encryption": "none"
+                    }]
+                }]
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "tls",
+                "tlsSettings": {"allowInsecure": True}
+            }
+        }
+
+    elif link.startswith("trojan://"):
+        # format: trojan://password@server:port?peer=xxx#name
+        m = re.match(r"trojan://(.+)@([\w\.\-]+):(\d+)", link)
+        if not m:
+            return None
+        passwd, addr, port = m.groups()
+        return {
+            "protocol": "trojan",
+            "settings": {
+                "servers": [{
+                    "address": addr,
+                    "port": int(port),
+                    "password": passwd
+                }]
+            },
+            "streamSettings": {
+                "security": "tls",
+                "tlsSettings": {"allowInsecure": True}
+            }
+        }
+
+    elif link.startswith("ss://"):
+        # untuk simplicity, skip detail parsing, asumsi ss:// sudah benar
+        return {
+            "protocol": "shadowsocks",
+            "settings": {
+                "servers": [{
+                    "address": "127.0.0.1",  # harus parsing detail base64, bisa ditambah nanti
+                    "port": 8388,
+                    "method": "aes-256-gcm",
+                    "password": "test"
+                }]
+            }
         }
     return None
 
-def check_account(link):
-    cfg = make_config(link)
-    if not cfg:
-        return (link, False)
+def check_delay(outbound):
+    cfg = {
+        "log": {"loglevel": "warning"},
+        "inbounds": [{
+            "port": 10808,
+            "listen": "127.0.0.1",
+            "protocol": "socks"
+        }],
+        "outbounds": [outbound]
+    }
 
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+    with open(tmp.name, "w") as f:
+        json.dump(cfg, f)
+
+    start = time.time()
     try:
-        with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
-            json.dump(cfg, tmp)
-            tmp.flush()
-            tmp_name = tmp.name
+        proc = subprocess.Popen(
+            ["xray", "-c", tmp.name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        time.sleep(1.5)  # kasih waktu xray boot
 
-        proc = subprocess.run(["xray", "-test", "-c", tmp_name], capture_output=True, timeout=10)
-        os.unlink(tmp_name)
-
-        if proc.returncode == 0:
-            return (link, True)
+        test = subprocess.run(
+            ["curl", "-x", "socks5h://127.0.0.1:10808", "-m", "8", "-o", "/dev/null", "-s", "-w", "%{http_code}", "https://www.google.com"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        code = test.stdout.decode().strip()
+        if code == "200":
+            delay = int((time.time() - start) * 1000)
+            return delay
         else:
-            return (link, False)
-    except Exception as e:
-        return (link, False)
+            return None
+    except Exception:
+        return None
+    finally:
+        proc.kill()
+        os.unlink(tmp.name)
+
+def main():
+    with open(AKUN_FILE, "r") as f:
+        accounts = [x.strip() for x in f if x.strip()]
+
+    results = []
+    for acc in accounts:
+        outbound = make_outbound(acc)
+        if not outbound:
+            continue
+        delay = check_delay(outbound)
+        if delay:
+            print(f"✅ {acc[:40]}... aktif, {delay} ms")
+            results.append(f"{acc}    ✅ {delay}ms")
+        else:
+            print(f"❌ {acc[:40]}... gagal")
+
+    with open(OUTPUT_FILE, "w") as f:
+        f.write("\n".join(results))
+
+    print(f"\n🔍 Total dicek: {len(accounts)}")
+    print(f"✅ Total aktif: {len(results)}")
 
 if __name__ == "__main__":
-    accounts = []
-    with open("akun.txt") as f:
-        raw = [line.strip() for line in f if line.strip()]
-
-    for item in raw:
-        if item.startswith("http://") or item.startswith("https://"):
-            accounts.extend(fetch_subscription(item))
-        else:
-            accounts.append(item)
-
-    print(f"🔍 Total akun/sub-akun dicek: {len(accounts)}")
-
-    active = []
-    with ThreadPoolExecutor(max_workers=5) as executor:  # lebih kecil biar xray tidak nabrak
-        futures = [executor.submit(check_account, acc) for acc in accounts]
-        for future in as_completed(futures):
-            acc, status = future.result()
-            if status:
-                active.append(acc)
-
-    with open("active_all.txt", "w") as f:
-        f.write("\n".join(active))
-
-    print(f"\n✅ Total aktif: {len(active)} / {len(accounts)}")
+    main()
