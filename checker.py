@@ -4,15 +4,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 AKUN_FILE = "akun.txt"
 OUTPUT_FILE = "active_all.txt"
 OUTPUT_QUIZ_FILE = "active_quiz.txt"
-MAX_WORKERS = 5
+MAX_WORKERS = 20  # Naikkan
 TIMEOUT = 10
-SLEEP_TIME = 3
-RETRY = 3
+SLEEP_TIME = 1  # Dipercepat
+RETRY = 1       # Cukup 1 retry
 BASE_PORT = 10808
 ENDPOINTS = ["http://cp.cloudflare.com/generate_204", "http://www.google.com/generate_204"]
 NEW_ADDR = "quiz.vidio.com"
 
-# Load akun / sub-link
+# Load akun
 def load_accounts(filename):
     accounts = []
     with open(filename) as f:
@@ -118,7 +118,6 @@ def make_outbound(link):
 def check_account(link):
     outbound = make_outbound(link)
     if not outbound:
-        print(f"❌ Invalid config: {link[:50]}...")
         return None
     
     for attempt in range(RETRY + 1):
@@ -131,41 +130,34 @@ def check_account(link):
         try:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
             cfg = {
-                "log": {"loglevel": "info"},
+                "log": {"loglevel": "none"},
                 "inbounds": [{"port": port, "listen": "127.0.0.1", "protocol": "socks"}],
                 "outbounds": [outbound, {"protocol": "freedom"}]
             }
             with open(tmp.name, 'w') as f:
                 json.dump(cfg, f)
             
-            print(f"🔄 Testing {link[:50]}... (attempt {attempt+1})")
-            proc = subprocess.Popen(["xray", "-c", tmp.name], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            proc = subprocess.Popen(["xray", "-c", tmp.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(SLEEP_TIME)
             
             success = False
             for endpoint in ENDPOINTS:
                 test = subprocess.run(
-                    ["curl", "-x", f"socks5h://127.0.0.1:{port}", "-m", str(TIMEOUT), "-s", "-o", "/dev/null",
-                     "-w", "%{http_code} %{time_total}", endpoint],
+                    ["curl", "-x", f"socks5h://127.0.0.1:{port}", "-m", str(TIMEOUT), "-s", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", endpoint],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
                 )
                 output = test.stdout.strip()
                 code, response_time = output.split() if ' ' in output else (output, "0")
                 
                 if code == "204" and float(response_time) < 10:
-                    ip_test = subprocess.run(
-                        ["curl", "-x", f"socks5h://127.0.0.1:{port}", "-m", "5", "-s", "http://ipinfo.io/ip"],
-                        stdout=subprocess.PIPE, text=True
-                    )
-                    if ip_test.stdout.strip():
-                        success = True
+                    success = True
                     break
             
             if success:
                 return link
         
-        except Exception as e:
-            print(f"   Error: {e}")
+        except:
+            pass
         finally:
             if proc:
                 proc.kill()
@@ -173,14 +165,12 @@ def check_account(link):
             if tmp:
                 os.unlink(tmp.name)
     
-    print(f"❌ Failed after {RETRY+1} tries: {link[:50]}...")
     return None
 
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
-# Ganti address ke NEW_ADDR
 def replace_address(line):
     line = line.strip()
     if line.startswith("vmess://"):
@@ -189,9 +179,7 @@ def replace_address(line):
         data = base64.urlsafe_b64decode(b64).decode()
         vmess = json.loads(data)
         vmess["add"] = NEW_ADDR
-        new_data = json.dumps(vmess)
-        new_b64 = base64.urlsafe_b64encode(new_data.encode()).decode()
-        return "vmess://" + new_b64
+        return "vmess://" + base64.urlsafe_b64encode(json.dumps(vmess).encode()).decode()
 
     elif line.startswith("vless://"):
         m = re.match(r"(vless://.+@)([^:/]+)(:\d+.*)", line)
@@ -225,21 +213,17 @@ def main():
         for future in as_completed(future_to_acc):
             res = future.result()
             if res:
-                print(f"🎉 Active: {res}")
                 results.append(res)
                 results_quiz.append(replace_address(res))
 
-    # Simpan akun aktif asli
     with open(OUTPUT_FILE, "w") as f:
         f.write("\n".join(results))
-
-    # Simpan akun aktif dengan address diganti
     with open(OUTPUT_QUIZ_FILE, "w") as f:
         f.write("\n".join(results_quiz))
 
-    print(f"\n🔍 Total dicek: {len(accounts)}")
-    print(f"✅ Total aktif: {len(results)}")
-    print(f"✅ Total aktif dengan address diganti: {len(results_quiz)}")
+    print(f"Total dicek: {len(accounts)}")
+    print(f"Total aktif: {len(results)}")
+    print(f"Total aktif dengan address diganti: {len(results_quiz)}")
 
 if __name__ == "__main__":
     main()
