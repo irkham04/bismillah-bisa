@@ -97,7 +97,7 @@ def make_outbound(link):
 
     elif link.startswith("ss://"):
         try:
-            part = line[5:].split('#')[0]
+            part = link[5:].split('#')[0]
             if '@' in part:
                 b64, server_port = part.split('@')
                 method_pass = base64.urlsafe_b64decode(b64 + "==").decode()
@@ -118,7 +118,7 @@ def make_outbound(link):
 def check_account(link):
     outbound = make_outbound(link)
     if not outbound:
-        return None
+        return None, link
     
     for attempt in range(RETRY + 1):
         port = BASE_PORT + random.randint(0, 1000)
@@ -140,22 +140,27 @@ def check_account(link):
             proc = subprocess.Popen(["xray", "-c", tmp.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(SLEEP_TIME)
             
-            success = False
             for endpoint in ENDPOINTS:
                 test = subprocess.run(
-                    ["curl", "-x", f"socks5h://127.0.0.1:{port}", "-m", str(TIMEOUT), "-s", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", endpoint],
+                    ["curl", "-x", f"socks5h://127.0.0.1:{port}", "-m", str(TIMEOUT),
+                     "-s", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", endpoint],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
                 )
                 output = test.stdout.strip()
-                code, response_time = output.split() if ' ' in output else (output, "0")
+                if not output: 
+                    continue
+                parts = output.split()
+                if len(parts) == 2:
+                    code, response_time = parts
+                else:
+                    continue
                 
-                if code == "204" and float(response_time) < 10:
-                    success = True
-                    break
-            
-            if success:
-                return link
-        
+                if code == "204":
+                    try:
+                        latency = int(float(response_time) * 1000)  # ms
+                        return latency, link
+                    except:
+                        continue
         except:
             pass
         finally:
@@ -165,36 +170,35 @@ def check_account(link):
             if tmp:
                 os.unlink(tmp.name)
     
-    return None
+    return None, link  # gagal
 
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
-# replace address dengan safe handling
-def replace_address(line):
-    line = line.strip()
+# replace address semua akun ke NEW_ADDR
+def replace_address_all(line):
+    line = line.strip().split('#')[0]  # buang delay dulu
+    delay = line.split('#')[1] if '#' in line else None
+
     if line.startswith("vmess://"):
-        b64 = line[7:]
-        b64 += '=' * (-len(b64) % 4)
         try:
+            b64 = line[7:]
+            b64 += '=' * (-len(b64) % 4)
             data = base64.urlsafe_b64decode(b64).decode('utf-8')
             vmess = json.loads(data)
             vmess["add"] = NEW_ADDR
             new_b64 = base64.urlsafe_b64encode(json.dumps(vmess).encode()).decode()
-            return "vmess://" + new_b64
+            result = "vmess://" + new_b64
         except:
-            return line
+            result = line
 
-    elif line.startswith("vless://"):
-        m = re.match(r"(vless://.+@)([^:/]+)(:\d+.*)", line)
+    elif line.startswith("vless://") or line.startswith("trojan://"):
+        m = re.match(r"(.+@)([^:/]+)(:\d+.*)", line)
         if m:
-            return m.group(1) + NEW_ADDR + m.group(3)
-
-    elif line.startswith("trojan://"):
-        m = re.match(r"(trojan://.+@)([^:/]+)(:\d+.*)", line)
-        if m:
-            return m.group(1) + NEW_ADDR + m.group(3)
+            result = m.group(1) + NEW_ADDR + m.group(3)
+        else:
+            result = line
 
     elif line.startswith("ss://"):
         try:
@@ -203,32 +207,49 @@ def replace_address(line):
                 method_pass, server_port = ss.split('@')
                 server_port = server_port.split(':')
                 server_port[0] = NEW_ADDR
-                return "ss://" + method_pass + "@" + ":".join(server_port)
+                result = "ss://" + method_pass + "@" + ":".join(server_port)
+            else:
+                result = line
         except:
-            return line
-    return line
+            result = line
+    else:
+        result = line
+
+    # tambahkan kembali delay
+    if '#' in line:
+        try:
+            parts = line.split('#')
+            if len(parts) > 1:
+                delay = parts[1]
+                result += f"#{delay}"
+        except:
+            pass
+    return result
 
 def main():
     accounts = load_accounts(AKUN_FILE)
     results = []
-    results_quiz = []
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_acc = {executor.submit(check_account, acc): acc for acc in accounts}
         for future in as_completed(future_to_acc):
-            res = future.result()
-            if res:
-                results.append(res)
-                results_quiz.append(replace_address(res))
+            latency, link = future.result()
+            if latency:  # hanya simpan yg aktif
+                results.append((latency, link))
 
-    with open(OUTPUT_FILE, "w") as f:
-        f.write("\n".join(results))
-    with open(OUTPUT_QUIZ_FILE, "w") as f:
-        f.write("\n".join(results_quiz))
+    # sort dari delay paling kecil → besar
+    results.sort(key=lambda x: x[0])
+
+    # tulis hasil
+    with open(OUTPUT_FILE, "w") as f, open(OUTPUT_QUIZ_FILE, "w") as fq:
+        for latency, link in results:
+            line = f"{link}#{latency}ms"
+            f.write(line + "\n")
+            fq.write(replace_address_all(line) + "\n")
 
     print(f"Total dicek: {len(accounts)}")
     print(f"Total aktif: {len(results)}")
-    print(f"Total aktif dengan address diganti: {len(results_quiz)}")
+    print(f"Hasil tersimpan di {OUTPUT_FILE} dan {OUTPUT_QUIZ_FILE}")
 
 if __name__ == "__main__":
     main()
