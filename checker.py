@@ -129,4 +129,69 @@ def to_clash(link, name="Proxy"):
         return {"name":name,"type":"ss","server":NEW_ADDR,"port":443,"cipher":"aes-128-gcm","password":"password123"}
     return None
 
-def save_clash(pr_
+def save_clash(proxies, filename=CLASH_FILE):
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    clash_config = {"proxies":proxies,
+                    "proxy-groups":[{"name":"Auto","type":"select","proxies":[p["name"] for p in proxies]}]}
+    with open(filename,"w") as f:
+        yaml.dump(clash_config,f,sort_keys=False)
+
+# ===================== Check akun =====================
+def check_account(link):
+    for _ in range(RETRY):
+        outbound = make_outbound(link)
+        if not outbound: return None
+        port = BASE_PORT + random.randint(0,1000)
+        while is_port_in_use(port):
+            port += 1
+        tmp = tempfile.NamedTemporaryFile(delete=False,suffix=".json")
+        cfg = {"log":{"loglevel":"none"},"inbounds":[{"port":port,"listen":"127.0.0.1","protocol":"socks"}],
+               "outbounds":[outbound,{"protocol":"freedom"}]}
+        with open(tmp.name,'w') as f:
+            json.dump(cfg,f)
+        try:
+            proc = subprocess.Popen([V2RAY_BINARY,"-config",tmp.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            start = time.time()
+            sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT)
+            try:
+                sock.connect(("127.0.0.1",port))
+                sock.sendall(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+                data = sock.recv(1024)
+                success = bool(data)
+            except:
+                success = False
+            finally:
+                sock.close()
+            end = time.time()
+        except:
+            success = False
+        finally:
+            proc.kill()
+            proc.wait()
+            os.unlink(tmp.name)
+        if success:
+            latency = int((end-start)*1000)
+            return latency, link
+    return None
+
+# ===================== Main =====================
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    accounts = load_accounts(AKUN_FILE)
+    results=[]
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_acc={executor.submit(check_account,acc):acc for acc in accounts}
+        for future in future_to_acc:
+            try:
+                r = future.result()
+                if r: results.append(r)
+            except: continue
+    results.sort(key=lambda x:x[0])
+
+    # Simpan active_all.txt
+    with open(OUTPUT_FILE,'w') as f:
+        for latency, link in results:
+            f.write(f"{link}#{latency}ms\n")
+
+    # Simpan clash_config.yaml
