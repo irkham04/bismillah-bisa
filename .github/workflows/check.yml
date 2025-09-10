@@ -3,7 +3,7 @@ name: Cek Akun Aktif
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 */3 * *"   # tiap 3 hari sekali jam 00:00 UTC (07:00 WIB)
+    - cron: "0 0 */3 * *"  # tiap 3 hari sekali jam 00:00 UTC
 
 jobs:
   check:
@@ -23,31 +23,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pyyaml
 
-      - name: Cache Xray
-        id: cache-xray
-        uses: actions/cache@v3
-        with:
-          path: /usr/local/bin/xray
-          key: xray-binary-v1
-
-      - name: Install Xray
-        if: steps.cache-xray.outputs.cache-hit != 'true'
+      - name: Download v2rayN Linux ARM64
         run: |
-          curl -L https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o xray.zip
-          unzip xray.zip -d xray
-          sudo mv xray/xray /usr/local/bin/xray
-          sudo chmod +x /usr/local/bin/xray
-          rm -rf xray.zip xray
+          wget -O v2rayN.zip https://github.com/2dust/v2rayN/releases/download/7.14.6/v2rayN-linux-arm64.zip
+          unzip v2rayN.zip -d v2rayN
+          chmod +x v2rayN/v2rayN
 
       - name: Run Checker
-        run: python checker.py
+        run: |
+          python checker.py
 
       - name: Commit & Push Hasil
         run: |
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions"
-          git add active_all.txt clash_config.yaml
-          git commit -m "Update active_all.txt & clash_config.yaml" || echo "Tidak ada perubahan"
+          git add output/active_all.txt output/clash_config.yaml
+          git commit -m "Update hasil checker" || echo "Tidak ada perubahan"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
