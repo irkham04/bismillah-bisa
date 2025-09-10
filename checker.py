@@ -1,4 +1,4 @@
-import asyncio, json, tempfile, os, re, base64, random, socket, time
+import asyncio, json, tempfile, os, re, base64, random, socket, time, requests
 from concurrent.futures import ThreadPoolExecutor
 
 AKUN_FILE = "akun.txt"
@@ -14,14 +14,28 @@ def load_accounts(filename):
     with open(filename) as f:
         for line in f:
             line = line.strip()
-            if not line: continue
+            if not line: 
+                continue
+            # langsung akun
             if line.startswith(("vmess://","vless://","trojan://","ss://")):
                 accounts.append(line)
+            # kalau sub url
+            elif line.startswith("http"):
+                try:
+                    resp = requests.get(line, timeout=10)
+                    resp.raise_for_status()
+                    for subline in resp.text.splitlines():
+                        subline = subline.strip()
+                        if subline.startswith(("vmess://","vless://","trojan://","ss://")):
+                            accounts.append(subline)
+                except Exception as e:
+                    print(f"Gagal ambil sub dari {line}: {e}")
     return accounts
 
 def decode_vmess(link):
     try:
-        b64 = link.replace("vmess://","") + '=' * (-len(link)%4)
+        raw = link.replace("vmess://","")
+        b64 = raw + '=' * (-len(raw)%4)
         data = base64.urlsafe_b64decode(b64).decode()
         vmess = json.loads(data)
         vmess["flow"] = vmess.get("flow","")
@@ -69,7 +83,8 @@ def replace_address_all(line):
     delay = line.split('#')[1] if '#' in line else None
     if line.startswith("vmess://"):
         try:
-            b64 = line[7:] + '=' * (-len(line)%4)
+            raw = line[7:]
+            b64 = raw + '=' * (-len(raw)%4)
             data = base64.urlsafe_b64decode(b64).decode()
             vmess = json.loads(data)
             vmess["add"] = NEW_ADDR
