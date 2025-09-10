@@ -1,15 +1,20 @@
-import asyncio, json, tempfile, os, re, base64, random, socket, time, requests, yaml
+import os, json, tempfile, socket, time, random, re, base64, requests, yaml
 from concurrent.futures import ThreadPoolExecutor
+import subprocess
 
+# ===================== Konfigurasi =====================
 AKUN_FILE = "akun.txt"
-OUTPUT_FILE = "active_all.txt"
-CLASH_FILE = "clash_config.yaml"
+OUTPUT_DIR = "output"
+OUTPUT_FILE = os.path.join(OUTPUT_DIR, "active_all.txt")
+CLASH_FILE = os.path.join(OUTPUT_DIR, "clash_config.yaml")
 MAX_WORKERS = 50
-TIMEOUT = 10
+TIMEOUT = 20  # timeout lebih tinggi
+RETRY = 2     # jumlah retry
 BASE_PORT = 10808
 NEW_ADDR = "quiz.vidio.com"
+V2RAY_BINARY = "./v2rayN/v2rayN"  # path ke v2rayN Linux ARM64
 
-# ===================== Load Akun =====================
+# ===================== Load akun =====================
 def load_accounts(filename):
     accounts = []
     with open(filename) as f:
@@ -20,7 +25,7 @@ def load_accounts(filename):
                 accounts.append(line)
             elif line.startswith("http"):
                 try:
-                    resp = requests.get(line, timeout=10)
+                    resp = requests.get(line, timeout=15)
                     resp.raise_for_status()
                     for subline in resp.text.splitlines():
                         subline = subline.strip()
@@ -35,14 +40,11 @@ def decode_vmess(link):
     try:
         raw = link.replace("vmess://","")
         b64 = raw + "=" * (-len(raw)%4)
-        data = base64.urlsafe_b64decode(b64).decode()
-        vmess = json.loads(data)
-        vmess["flow"] = vmess.get("flow","")
-        return vmess
+        return json.loads(base64.urlsafe_b64decode(b64).decode())
     except:
         return None
 
-# ===================== Make Outbound =====================
+# ===================== Make outbound =====================
 def make_outbound(link):
     if link.startswith("vmess://"):
         vmess = decode_vmess(link)
@@ -73,12 +75,12 @@ def make_outbound(link):
             return None
     return None
 
-# ===================== Check Port =====================
+# ===================== Check port =====================
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1',port)) == 0
 
-# ===================== Replace Address =====================
+# ===================== Replace address =====================
 def replace_address(link):
     if link.startswith("vmess://"):
         try:
@@ -89,8 +91,7 @@ def replace_address(link):
             vmess["add"] = NEW_ADDR
             new_b64 = base64.urlsafe_b64encode(json.dumps(vmess).encode()).decode()
             return "vmess://" + new_b64
-        except:
-            return link
+        except: return link
     elif link.startswith(("vless://","trojan://")):
         m = re.match(r"(.+@)([^:/]+)(:\d+.*)", link)
         if m: return m.group(1)+NEW_ADDR+m.group(3)
@@ -102,8 +103,7 @@ def replace_address(link):
                 server_port = server_port.split(':')
                 server_port[0] = NEW_ADDR
                 return "ss://"+method_pass+"@"+":".join(server_port)
-        except:
-            return link
+        except: return link
     return link
 
 # ===================== Convert ke Clash =====================
@@ -111,78 +111,73 @@ def to_clash(link, name="Proxy"):
     if link.startswith("vmess://"):
         vmess = decode_vmess(link)
         if not vmess: return None
-        return {
-            "name": name,
-            "type": "vmess",
-            "server": vmess["add"],
-            "port": int(vmess["port"]),
-            "uuid": vmess["id"],
-            "alterId": int(vmess.get("aid",0)),
-            "cipher": "auto",
-            "tls": True if vmess.get("tls","")=="tls" else False,
-            "network": vmess.get("net","ws"),
-            "ws-opts": {"path": vmess.get("path","/")}
-        }
+        return {"name":name,"type":"vmess","server":vmess["add"],"port":int(vmess["port"]),
+                "uuid":vmess["id"],"alterId":int(vmess.get("aid",0)),"cipher":"auto",
+                "tls": True if vmess.get("tls","")=="tls" else False,
+                "network": vmess.get("net","ws"),"ws-opts":{"path":vmess.get("path","/")}}
     elif link.startswith("vless://"):
         m = re.match(r"vless://(.+)@([\w\.\-]+):(\d+)", link)
         if not m: return None
         uid, addr, port = m.groups()
-        return {"name": name, "type": "vless", "server": addr, "port": int(port), "uuid": uid, "tls": True, "network":"ws"}
+        return {"name":name,"type":"vless","server":addr,"port":int(port),"uuid":uid,"tls":True,"network":"ws"}
     elif link.startswith("trojan://"):
         m = re.match(r"trojan://(.+)@([\w\.\-]+):(\d+)", link)
         if not m: return None
         pwd, addr, port = m.groups()
-        return {"name": name, "type":"trojan","server":addr,"port":int(port),"password":pwd,"sni":addr}
+        return {"name":name,"type":"trojan","server":addr,"port":int(port),"password":pwd,"sni":addr}
     elif link.startswith("ss://"):
         return {"name":name,"type":"ss","server":NEW_ADDR,"port":443,"cipher":"aes-128-gcm","password":"password123"}
     return None
 
 def save_clash(proxies, filename=CLASH_FILE):
-    clash_config = {
-        "proxies": proxies,
-        "proxy-groups": [{"name":"Auto","type":"select","proxies":[p["name"] for p in proxies]}]
-    }
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    clash_config = {"proxies":proxies,
+                    "proxy-groups":[{"name":"Auto","type":"select","proxies":[p["name"] for p in proxies]}]}
     with open(filename,"w") as f:
         yaml.dump(clash_config,f,sort_keys=False)
 
-# ===================== Check Account =====================
+# ===================== Check akun =====================
 def check_account(link):
-    outbound = make_outbound(link)
-    if not outbound: return None
-    port = BASE_PORT + random.randint(0,1000)
-    while is_port_in_use(port):
-        port += 1
-    tmp = tempfile.NamedTemporaryFile(delete=False,suffix=".json")
-    cfg = {"log":{"loglevel":"none"},"inbounds":[{"port":port,"listen":"127.0.0.1","protocol":"socks"}],
-           "outbounds":[outbound,{"protocol":"freedom"}]}
-    with open(tmp.name,'w') as f: json.dump(cfg,f)
-    import subprocess
-    proc = subprocess.Popen(["xray","-c",tmp.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    start = time.time()
-    success = False
-    try:
-        sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-        sock.settimeout(TIMEOUT)
+    for _ in range(RETRY):
+        outbound = make_outbound(link)
+        if not outbound: return None
+        port = BASE_PORT + random.randint(0,1000)
+        while is_port_in_use(port):
+            port += 1
+        tmp = tempfile.NamedTemporaryFile(delete=False,suffix=".json")
+        cfg = {"log":{"loglevel":"none"},"inbounds":[{"port":port,"listen":"127.0.0.1","protocol":"socks"}],
+               "outbounds":[outbound,{"protocol":"freedom"}]}
+        with open(tmp.name,'w') as f:
+            json.dump(cfg,f)
         try:
-            sock.connect(("127.0.0.1",port))
-            success = True
+            proc = subprocess.Popen([V2RAY_BINARY,"-config",tmp.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            start = time.time()
+            sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT)
+            try:
+                sock.connect(("127.0.0.1",port))
+                sock.sendall(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+                data = sock.recv(1024)
+                success = bool(data)
+            except:
+                success = False
+            finally:
+                sock.close()
+            end = time.time()
         except:
             success = False
         finally:
-            sock.close()
-    except:
-        success=False
-    end = time.time()
-    proc.kill()
-    proc.wait()
-    os.unlink(tmp.name)
-    if success:
-        latency = int((end-start)*1000)
-        return latency, link
+            proc.kill()
+            proc.wait()
+            os.unlink(tmp.name)
+        if success:
+            latency = int((end-start)*1000)
+            return latency, link
     return None
 
 # ===================== Main =====================
 def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     accounts = load_accounts(AKUN_FILE)
     results=[]
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -190,26 +185,4 @@ def main():
         for future in future_to_acc:
             try:
                 r = future.result()
-                if r: results.append(r)
-            except: continue
-
-    results.sort(key=lambda x:x[0])
-
-    # Simpan active_all.txt
-    with open(OUTPUT_FILE,'w') as f:
-        for idx,(latency,link) in enumerate(results,1):
-            f.write(f"{link}#{latency}ms\n")
-
-    # Simpan clash_config.yaml
-    clash_proxies=[]
-    for idx,(latency,link) in enumerate(results,1):
-        link_new = replace_address(link)
-        proxy = to_clash(link_new, f"Proxy-{idx}")
-        if proxy: clash_proxies.append(proxy)
-    save_clash(clash_proxies)
-
-    print(f"Total dicek: {len(accounts)}")
-    print(f"Total aktif: {len(results)}")
-
-if __name__=="__main__":
-    main()
+                if r: results.append
