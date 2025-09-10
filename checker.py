@@ -195,3 +195,12 @@ def main():
             f.write(f"{link}#{latency}ms\n")
 
     # Simpan clash_config.yaml
+    proxies = [to_clash(link, f"Proxy-{i+1}") for i,(lat,link) in enumerate(results)]
+    proxies = [p for p in proxies if p]
+    save_clash(proxies)
+
+    print(f"Total dicek: {len(accounts)}")
+    print(f"Total aktif: {len(results)}")
+
+if __name__=="__main__":
+    main()
