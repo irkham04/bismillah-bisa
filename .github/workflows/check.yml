@@ -1,13 +1,46 @@
-- name: Commit & Push Hasil
-  run: |
-    git config --global user.email "actions@github.com"
-    git config --global user.name "GitHub Actions"
-    # Buat folder output kalau belum ada
-    mkdir -p output
-    # Buat file kosong kalau belum ada
-    touch output/active_all.txt output/clash_config.yaml
-    git add output/active_all.txt output/clash_config.yaml
-    git commit -m "Update hasil checker" || echo "Tidak ada perubahan"
-    git push
-  env:
-    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+name: Cek Akun Aktif
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 */3 * *"  # tiap 3 hari sekali jam 00:00 UTC
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyyaml
+
+      - name: Download v2rayN Linux ARM64 & set Xray
+        run: |
+          wget -O v2rayN.zip https://github.com/2dust/v2rayN/releases/download/7.14.6/v2rayN-linux-arm64.zip
+          unzip v2rayN.zip -d v2rayN
+          chmod +x v2rayN/v2rayN-linux-arm64/bin/xray/xray
+
+      - name: Run Checker
+        run: python checker.py
+
+      - name: Commit & Push Hasil
+        run: |
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
+          # pastikan folder output & file ada
+          mkdir -p output
+          touch output/active_all.txt output/clash_config.yaml
+          git add output/active_all.txt output/clash_config.yaml
+          git commit -m "Update hasil checker" || echo "Tidak ada perubahan"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
