@@ -1,25 +1,23 @@
-import asyncio, json, tempfile, os, re, base64, random, socket, time, requests
+import asyncio, json, tempfile, os, re, base64, random, socket, time, requests, yaml
 from concurrent.futures import ThreadPoolExecutor
 
 AKUN_FILE = "akun.txt"
 OUTPUT_FILE = "active_all.txt"
-OUTPUT_QUIZ_FILE = "active_quiz.txt"
+CLASH_FILE = "clash_config.yaml"
 MAX_WORKERS = 50
 TIMEOUT = 10
 BASE_PORT = 10808
 NEW_ADDR = "quiz.vidio.com"
 
+# ===================== Load Akun =====================
 def load_accounts(filename):
     accounts = []
     with open(filename) as f:
         for line in f:
             line = line.strip()
-            if not line: 
-                continue
-            # langsung akun
+            if not line: continue
             if line.startswith(("vmess://","vless://","trojan://","ss://")):
                 accounts.append(line)
-            # kalau sub url
             elif line.startswith("http"):
                 try:
                     resp = requests.get(line, timeout=10)
@@ -32,10 +30,11 @@ def load_accounts(filename):
                     print(f"Gagal ambil sub dari {line}: {e}")
     return accounts
 
+# ===================== Decode Vmess =====================
 def decode_vmess(link):
     try:
         raw = link.replace("vmess://","")
-        b64 = raw + '=' * (-len(raw)%4)
+        b64 = raw + "=" * (-len(raw)%4)
         data = base64.urlsafe_b64decode(b64).decode()
         vmess = json.loads(data)
         vmess["flow"] = vmess.get("flow","")
@@ -43,6 +42,7 @@ def decode_vmess(link):
     except:
         return None
 
+# ===================== Make Outbound =====================
 def make_outbound(link):
     if link.startswith("vmess://"):
         vmess = decode_vmess(link)
@@ -64,9 +64,8 @@ def make_outbound(link):
         try:
             ss = link[5:].split('#')[0]
             if '@' in ss:
-                b64, server_port = ss.split('@')
-                method_pass = base64.urlsafe_b64decode(b64 + "==").decode()
-                method, password = method_pass.split(':',1)
+                method_pass, server_port = ss.split('@')
+                method, password = base64.urlsafe_b64decode(method_pass+"==").decode().split(':',1)
                 server, port = server_port.split(':')
                 return {"protocol":"shadowsocks","settings":{"servers":[{"address":server,"port":int(port),
                         "method":method,"password":password}]}}
@@ -74,41 +73,79 @@ def make_outbound(link):
             return None
     return None
 
+# ===================== Check Port =====================
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1',port)) == 0
 
-def replace_address_all(line):
-    line = line.strip().split('#')[0]
-    delay = line.split('#')[1] if '#' in line else None
-    if line.startswith("vmess://"):
+# ===================== Replace Address =====================
+def replace_address(link):
+    if link.startswith("vmess://"):
         try:
-            raw = line[7:]
-            b64 = raw + '=' * (-len(raw)%4)
+            raw = link[7:]
+            b64 = raw + "=" * (-len(raw)%4)
             data = base64.urlsafe_b64decode(b64).decode()
             vmess = json.loads(data)
             vmess["add"] = NEW_ADDR
             new_b64 = base64.urlsafe_b64encode(json.dumps(vmess).encode()).decode()
-            result = "vmess://" + new_b64
-        except: result = line
-    elif line.startswith(("vless://","trojan://")):
-        m = re.match(r"(.+@)([^:/]+)(:\d+.*)", line)
-        if m: result = m.group(1)+NEW_ADDR+m.group(3)
-        else: result = line
-    elif line.startswith("ss://"):
+            return "vmess://" + new_b64
+        except:
+            return link
+    elif link.startswith(("vless://","trojan://")):
+        m = re.match(r"(.+@)([^:/]+)(:\d+.*)", link)
+        if m: return m.group(1)+NEW_ADDR+m.group(3)
+    elif link.startswith("ss://"):
         try:
-            ss = line[5:]
+            ss = link[5:]
             if '@' in ss:
                 method_pass, server_port = ss.split('@')
                 server_port = server_port.split(':')
                 server_port[0] = NEW_ADDR
-                result = "ss://"+method_pass+"@"+":".join(server_port)
-            else: result = line
-        except: result=line
-    else: result=line
-    if delay: result += f"#{delay}"
-    return result
+                return "ss://"+method_pass+"@"+":".join(server_port)
+        except:
+            return link
+    return link
 
+# ===================== Convert ke Clash =====================
+def to_clash(link, name="Proxy"):
+    if link.startswith("vmess://"):
+        vmess = decode_vmess(link)
+        if not vmess: return None
+        return {
+            "name": name,
+            "type": "vmess",
+            "server": vmess["add"],
+            "port": int(vmess["port"]),
+            "uuid": vmess["id"],
+            "alterId": int(vmess.get("aid",0)),
+            "cipher": "auto",
+            "tls": True if vmess.get("tls","")=="tls" else False,
+            "network": vmess.get("net","ws"),
+            "ws-opts": {"path": vmess.get("path","/")}
+        }
+    elif link.startswith("vless://"):
+        m = re.match(r"vless://(.+)@([\w\.\-]+):(\d+)", link)
+        if not m: return None
+        uid, addr, port = m.groups()
+        return {"name": name, "type": "vless", "server": addr, "port": int(port), "uuid": uid, "tls": True, "network":"ws"}
+    elif link.startswith("trojan://"):
+        m = re.match(r"trojan://(.+)@([\w\.\-]+):(\d+)", link)
+        if not m: return None
+        pwd, addr, port = m.groups()
+        return {"name": name, "type":"trojan","server":addr,"port":int(port),"password":pwd,"sni":addr}
+    elif link.startswith("ss://"):
+        return {"name":name,"type":"ss","server":NEW_ADDR,"port":443,"cipher":"aes-128-gcm","password":"password123"}
+    return None
+
+def save_clash(proxies, filename=CLASH_FILE):
+    clash_config = {
+        "proxies": proxies,
+        "proxy-groups": [{"name":"Auto","type":"select","proxies":[p["name"] for p in proxies]}]
+    }
+    with open(filename,"w") as f:
+        yaml.dump(clash_config,f,sort_keys=False)
+
+# ===================== Check Account =====================
 def check_account(link):
     outbound = make_outbound(link)
     if not outbound: return None
@@ -144,6 +181,7 @@ def check_account(link):
         return latency, link
     return None
 
+# ===================== Main =====================
 def main():
     accounts = load_accounts(AKUN_FILE)
     results=[]
@@ -154,12 +192,22 @@ def main():
                 r = future.result()
                 if r: results.append(r)
             except: continue
+
     results.sort(key=lambda x:x[0])
-    with open(OUTPUT_FILE,'w') as f, open(OUTPUT_QUIZ_FILE,'w') as fq:
-        for latency,link in results:
-            line=f"{link}#{latency}ms"
-            f.write(line+"\n")
-            fq.write(replace_address_all(line)+"\n")
+
+    # Simpan active_all.txt
+    with open(OUTPUT_FILE,'w') as f:
+        for idx,(latency,link) in enumerate(results,1):
+            f.write(f"{link}#{latency}ms\n")
+
+    # Simpan clash_config.yaml
+    clash_proxies=[]
+    for idx,(latency,link) in enumerate(results,1):
+        link_new = replace_address(link)
+        proxy = to_clash(link_new, f"Proxy-{idx}")
+        if proxy: clash_proxies.append(proxy)
+    save_clash(clash_proxies)
+
     print(f"Total dicek: {len(accounts)}")
     print(f"Total aktif: {len(results)}")
 
