@@ -23,11 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pyyaml
 
-      - name: Download v2rayN Linux ARM64
+      - name: Download v2rayN Linux ARM64 & set Xray
         run: |
           wget -O v2rayN.zip https://github.com/2dust/v2rayN/releases/download/7.14.6/v2rayN-linux-arm64.zip
           unzip v2rayN.zip -d v2rayN
-          chmod +x v2rayN/v2rayN-linux-arm64/v2rayN
+          chmod +x v2rayN/v2rayN-linux-arm64/bin/xray/xray
 
       - name: Run Checker
         run: python checker.py
