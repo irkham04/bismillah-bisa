@@ -12,7 +12,7 @@ TIMEOUT = 20  # timeout lebih tinggi
 RETRY = 2     # jumlah retry
 BASE_PORT = 10808
 NEW_ADDR = "quiz.vidio.com"
-V2RAY_BINARY = "./v2rayN/v2rayN"  # path ke v2rayN Linux ARM64
+V2RAY_BINARY = "./v2rayN/v2rayN-linux-arm64/v2rayN" # path ke v2rayN Linux ARM64
 
 # ===================== Load akun =====================
 def load_accounts(filename):
