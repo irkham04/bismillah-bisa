@@ -1,0 +1,5 @@
+proxies: []
+proxy-groups:
+- name: Auto
+  type: select
+  proxies: []
